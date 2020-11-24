@@ -11,20 +11,29 @@ import freqtrade.vendor.qtpylib.indicators as qtpylib
 
 class Simple(IStrategy):
 
+    # ROI table:
     minimal_roi = {
-        "15":  0.50
+        "0": 0.11721,
+        "37": 0.06113,
+        "75": 0.03839,
+        "148": 0
     }
 
-    # Optimal stoploss designed for the strategy
-    # This attribute will be overridden if the config file contains "stoploss"
-    stoploss = -0.05
+    # Stoploss:
+    stoploss = -0.30808
+
+    # Trailing stop:
     trailing_stop = True
+    trailing_stop_positive = 0.32231
+    trailing_stop_positive_offset = 0.4197
+    trailing_only_offset_is_reached = True
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         # SMA
-        dataframe['sma_short'] = ta.SMA(dataframe, timeperiod=10)
-        dataframe['sma_mid'] = ta.SMA(dataframe, timeperiod=30)
+        dataframe['sma_short'] = ta.SMA(dataframe, timeperiod=8)
+        dataframe['sma_mid'] = ta.SMA(dataframe, timeperiod=58)
         dataframe['sma_long'] = ta.SMA(dataframe, timeperiod=1440)
+        dataframe['sma_sell'] = ta.SMA(dataframe, timeperiod=15)
 
         # RSI
         dataframe['rsi'] = ta.RSI(dataframe, timeperiod=60)
@@ -42,7 +51,7 @@ class Simple(IStrategy):
                         (dataframe['sma_short'] > dataframe['sma_mid'])  # over signal
                         & (dataframe['sma_mid'] > dataframe['sma_long'])
                         & (dataframe['close'] > dataframe['bb_upperband'])  # pointed up
-                        & (dataframe['rsi'] > 60)  # optional filter, need to investigate
+                        & (dataframe['rsi'] > 61)  # optional filter, need to investigate
                 )
             ),
             'buy'] = 1
@@ -52,7 +61,7 @@ class Simple(IStrategy):
         dataframe.loc[
             (
                 (
-                        (dataframe['sma_short'] < dataframe['sma_long'])  # over signal
+                        (dataframe['sma_sell'] < dataframe['sma_long'])  # over signal
                 )
             ),
             'sell'] = 1

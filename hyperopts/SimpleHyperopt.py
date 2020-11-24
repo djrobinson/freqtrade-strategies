@@ -16,6 +16,10 @@ from freqtrade.optimize.hyperopt_interface import IHyperOpt
 import talib.abstract as ta  # noqa
 import freqtrade.vendor.qtpylib.indicators as qtpylib
 
+shortRangeBegin = 5
+shortRangeEnd = 25
+mediumRangeBegin = 30
+mediumRangeEnd = 60
 
 class SimpleHyperopt(IHyperOpt):
     """
@@ -41,109 +45,73 @@ class SimpleHyperopt(IHyperOpt):
 
     @staticmethod
     def buy_strategy_generator(params: Dict[str, Any]) -> Callable:
-        """
-        Define the buy strategy parameters to be used by Hyperopt.
-        """
         def populate_buy_trend(dataframe: DataFrame, metadata: dict) -> DataFrame:
-            """
-            Buy strategy Hyperopt will build and use.
-            """
-            conditions = []
-
-            # GUARDS AND TRENDS
-            if params.get('mfi-enabled'):
-                conditions.append(dataframe['mfi'] < params['mfi-value'])
-            if params.get('fastd-enabled'):
-                conditions.append(dataframe['fastd'] < params['fastd-value'])
-            if params.get('adx-enabled'):
-                conditions.append(dataframe['adx'] > params['adx-value'])
-            if params.get('rsi-enabled'):
-                conditions.append(dataframe['rsi'] < params['rsi-value'])
-
-            # TRIGGERS
             if 'trigger' in params:
-                if params['trigger'] == 'bb_lower':
-                    conditions.append(dataframe['close'] < dataframe['bb_lowerband'])
-                if params['trigger'] == 'macd_cross_signal':
-                    conditions.append(qtpylib.crossed_above(
-                        dataframe['macd'], dataframe['macdsignal']
-                    ))
-                if params['trigger'] == 'sar_reversal':
-                    conditions.append(qtpylib.crossed_above(
-                        dataframe['close'], dataframe['sar']
-                    ))
-
-            # Check that the candle had volume
-            conditions.append(dataframe['volume'] > 0)
-
-            if conditions:
+                trigger_list = params['trigger'].split('.')
                 dataframe.loc[
-                    reduce(lambda x, y: x & y, conditions),
+                    (
+                        (
+                                (dataframe[f"maShort({trigger_list[0]})"] > dataframe[f"maMedium({trigger_list[1]})"])
+                                & (dataframe[f"maMedium({trigger_list[1]})"] > dataframe['sma_long'])
+                                & (dataframe['close'] > dataframe['bb_upperband'])  # pointed up
+                                & (dataframe['rsi'] > params['rsi-value'])
+                        )
+                    ),
                     'buy'] = 1
-
             return dataframe
 
         return populate_buy_trend
+
+    @staticmethod
+    def populate_indicators(dataframe: DataFrame, metadata: dict) -> DataFrame:
+
+        for short in range(shortRangeBegin, shortRangeEnd):
+            dataframe[f'maShort({short})'] = ta.EMA(dataframe, timeperiod=short)
+
+        for medium in range(mediumRangeBegin, mediumRangeEnd):
+            dataframe[f'maMedium({medium})'] = ta.EMA(dataframe, timeperiod=medium)
+        
+        dataframe['sma_long'] = ta.SMA(dataframe, timeperiod=1440)
+
+        # RSI
+        dataframe['rsi'] = ta.RSI(dataframe, timeperiod=60)
+
+        # required for graphing
+        bollinger = qtpylib.bollinger_bands(dataframe['close'], window=30, stds=2)
+        dataframe['bb_upperband'] = bollinger['upper']
+
+        return dataframe
 
     @staticmethod
     def indicator_space() -> List[Dimension]:
         """
         Define your Hyperopt space for searching buy strategy parameters.
         """
+        buyTriggerList = []
+        for short in range(shortRangeBegin, shortRangeEnd):
+            for medium in range(mediumRangeBegin, mediumRangeEnd):
+                # The output will be (short, long)
+                buyTriggerList.append(
+                    f"{short}.{medium}"
+                )
         return [
-            Integer(10, 25, name='mfi-value'),
-            Integer(15, 45, name='fastd-value'),
-            Integer(20, 50, name='adx-value'),
-            Integer(20, 40, name='rsi-value'),
-            Categorical([True, False], name='mfi-enabled'),
-            Categorical([True, False], name='fastd-enabled'),
-            Categorical([True, False], name='adx-enabled'),
-            Categorical([True, False], name='rsi-enabled'),
-            Categorical(['bb_lower', 'macd_cross_signal', 'sar_reversal'], name='trigger')
+            Integer(60, 90, name='rsi-value'),
+            Categorical(buyTriggerList, name='trigger')
         ]
 
     @staticmethod
     def sell_strategy_generator(params: Dict[str, Any]) -> Callable:
-        """
-        Define the sell strategy parameters to be used by Hyperopt.
-        """
         def populate_sell_trend(dataframe: DataFrame, metadata: dict) -> DataFrame:
-            """
-            Sell strategy Hyperopt will build and use.
-            """
             conditions = []
 
-            # GUARDS AND TRENDS
-            if params.get('sell-mfi-enabled'):
-                conditions.append(dataframe['mfi'] > params['sell-mfi-value'])
-            if params.get('sell-fastd-enabled'):
-                conditions.append(dataframe['fastd'] > params['sell-fastd-value'])
-            if params.get('sell-adx-enabled'):
-                conditions.append(dataframe['adx'] < params['sell-adx-value'])
-            if params.get('sell-rsi-enabled'):
-                conditions.append(dataframe['rsi'] > params['sell-rsi-value'])
-
-            # TRIGGERS
             if 'sell-trigger' in params:
-                if params['sell-trigger'] == 'sell-bb_upper':
-                    conditions.append(dataframe['close'] > dataframe['bb_upperband'])
-                if params['sell-trigger'] == 'sell-macd_cross_signal':
-                    conditions.append(qtpylib.crossed_above(
-                        dataframe['macdsignal'], dataframe['macd']
-                    ))
-                if params['sell-trigger'] == 'sell-sar_reversal':
-                    conditions.append(qtpylib.crossed_above(
-                        dataframe['sar'], dataframe['close']
-                    ))
-
-            # Check that the candle had volume
-            conditions.append(dataframe['volume'] > 0)
-
-            if conditions:
                 dataframe.loc[
-                    reduce(lambda x, y: x & y, conditions),
+                    (
+                        (
+                                dataframe[f"maShort({params['sell-trigger']})"] < dataframe['sma_long']
+                        )
+                    ),
                     'sell'] = 1
-
             return dataframe
 
         return populate_sell_trend
@@ -151,18 +119,38 @@ class SimpleHyperopt(IHyperOpt):
     @staticmethod
     def sell_indicator_space() -> List[Dimension]:
         """
-        Define your Hyperopt space for searching sell strategy parameters.
+        Define your Hyperopt space for searching sell strategy parameters
         """
+        sellTriggerList = []
+        for short in range(shortRangeBegin, shortRangeEnd):
+            sellTriggerList.append(short)
+
         return [
-            Integer(75, 100, name='sell-mfi-value'),
-            Integer(50, 100, name='sell-fastd-value'),
-            Integer(50, 100, name='sell-adx-value'),
-            Integer(60, 100, name='sell-rsi-value'),
-            Categorical([True, False], name='sell-mfi-enabled'),
-            Categorical([True, False], name='sell-fastd-enabled'),
-            Categorical([True, False], name='sell-adx-enabled'),
-            Categorical([True, False], name='sell-rsi-enabled'),
-            Categorical(['sell-bb_upper',
-                         'sell-macd_cross_signal',
-                         'sell-sar_reversal'], name='sell-trigger')
+            Categorical(sellTriggerList, name='sell-trigger')
         ]
+
+
+    def populate_buy_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        dataframe.loc[
+            (
+                (
+                        (dataframe[f"maShort({shortRangeBegin})"] > dataframe[f"maMedium({mediumRangeBegin})"])
+                        & (dataframe[f"maMedium({mediumRangeBegin})"] > dataframe['sma_long'])
+                        & (dataframe['close'] > dataframe['bb_upperband'])  # pointed up
+                        & (dataframe['rsi'] > 60)
+                )
+            ),
+            'buy'] = 1
+        return dataframe
+
+
+    def populate_sell_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+
+        dataframe.loc[
+            (
+                (
+                        dataframe[f"maShort({shortRangeBegin})"] < dataframe['sma_long']
+                )
+            ),
+            'sell'] = 1
+        return dataframe
