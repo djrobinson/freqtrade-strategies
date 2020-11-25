@@ -17,9 +17,11 @@ import talib.abstract as ta  # noqa
 import freqtrade.vendor.qtpylib.indicators as qtpylib
 
 shortRangeBegin = 5
-shortRangeEnd = 25
-mediumRangeBegin = 30
-mediumRangeEnd = 60
+shortRangeEnd = 30
+mediumRangeBegin = 35
+mediumRangeEnd = 70
+bbWindowBegin = 15
+bbWindowEnd = 120
 
 class SimpleHyperopt(IHyperOpt):
     """
@@ -46,39 +48,37 @@ class SimpleHyperopt(IHyperOpt):
     @staticmethod
     def buy_strategy_generator(params: Dict[str, Any]) -> Callable:
         def populate_buy_trend(dataframe: DataFrame, metadata: dict) -> DataFrame:
-            if 'trigger' in params:
+            # When would these ever not be in params??...
+            if 'trigger' in params and 'bb-window' in params:
                 trigger_list = params['trigger'].split('.')
                 dataframe.loc[
                     (
                         (
                                 (dataframe[f"maShort({trigger_list[0]})"] > dataframe[f"maMedium({trigger_list[1]})"])
-                                & (dataframe[f"maMedium({trigger_list[1]})"] > dataframe['sma_long'])
-                                & (dataframe['close'] > dataframe['bb_upperband'])  # pointed up
-                                & (dataframe['rsi'] > params['rsi-value'])
+                                & (dataframe[f"maMedium({trigger_list[1]})"] > dataframe["maLong"])
+                                & (dataframe['close'] > dataframe[f"bbUpperBand({params['bb-window']})"])
+                                & (dataframe["rsi"] > params['rsi-value'])
                         )
                     ),
                     'buy'] = 1
             return dataframe
-
         return populate_buy_trend
 
     @staticmethod
     def populate_indicators(dataframe: DataFrame, metadata: dict) -> DataFrame:
-
         for short in range(shortRangeBegin, shortRangeEnd):
-            dataframe[f'maShort({short})'] = ta.EMA(dataframe, timeperiod=short)
+            dataframe[f'maShort({short})'] = ta.SMA(dataframe, timeperiod=short)
 
         for medium in range(mediumRangeBegin, mediumRangeEnd):
-            dataframe[f'maMedium({medium})'] = ta.EMA(dataframe, timeperiod=medium)
-        
-        dataframe['sma_long'] = ta.SMA(dataframe, timeperiod=1440)
+            dataframe[f'maMedium({medium})'] = ta.SMA(dataframe, timeperiod=medium)
+
+        for window in range(bbWindowBegin, bbWindowEnd, 5):
+            bollinger = qtpylib.bollinger_bands(dataframe['close'], window=window, stds=2)
+            dataframe[f'bbUpperBand({window})'] = bollinger['upper']
 
         # RSI
         dataframe['rsi'] = ta.RSI(dataframe, timeperiod=60)
-
-        # required for graphing
-        bollinger = qtpylib.bollinger_bands(dataframe['close'], window=30, stds=2)
-        dataframe['bb_upperband'] = bollinger['upper']
+        dataframe['maLong'] = ta.SMA(dataframe, timeperiod=1440)
 
         return dataframe
 
@@ -94,9 +94,30 @@ class SimpleHyperopt(IHyperOpt):
                 buyTriggerList.append(
                     f"{short}.{medium}"
                 )
+        bbWindowList = []
+        for bbWindow in range(bbWindowBegin, bbWindowEnd, 5):
+            bbWindowList.append(bbWindow)
+
         return [
             Integer(60, 90, name='rsi-value'),
-            Categorical(buyTriggerList, name='trigger')
+            Categorical(buyTriggerList, name='trigger'),
+            Categorical(bbWindowList, name='bb-window')
+        ]
+    
+    @staticmethod
+    def sell_indicator_space() -> List[Dimension]:
+        """
+        Define your Hyperopt space for searching sell strategy parameters.
+        """
+        buyTriggerList = []
+        for short in range(shortRangeBegin, shortRangeEnd):
+            for medium in range(mediumRangeBegin, mediumRangeEnd):
+                # The output will be (short, long)
+                buyTriggerList.append(
+                    f"{short}.{medium}"
+                )
+        return [
+            Categorical(buyTriggerList, name='sell-trigger')
         ]
 
     @staticmethod
@@ -105,10 +126,11 @@ class SimpleHyperopt(IHyperOpt):
             conditions = []
 
             if 'sell-trigger' in params:
+                trigger_list = params['sell-trigger'].split('.')
                 dataframe.loc[
                     (
                         (
-                                dataframe[f"maShort({params['sell-trigger']})"] < dataframe['sma_long']
+                                dataframe[f"maShort({trigger_list[0]})"] < dataframe["maLong"]
                         )
                     ),
                     'sell'] = 1
@@ -116,27 +138,14 @@ class SimpleHyperopt(IHyperOpt):
 
         return populate_sell_trend
 
-    @staticmethod
-    def sell_indicator_space() -> List[Dimension]:
-        """
-        Define your Hyperopt space for searching sell strategy parameters
-        """
-        sellTriggerList = []
-        for short in range(shortRangeBegin, shortRangeEnd):
-            sellTriggerList.append(short)
-
-        return [
-            Categorical(sellTriggerList, name='sell-trigger')
-        ]
-
 
     def populate_buy_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         dataframe.loc[
             (
                 (
                         (dataframe[f"maShort({shortRangeBegin})"] > dataframe[f"maMedium({mediumRangeBegin})"])
-                        & (dataframe[f"maMedium({mediumRangeBegin})"] > dataframe['sma_long'])
-                        & (dataframe['close'] > dataframe['bb_upperband'])  # pointed up
+                        & (dataframe[f"maMedium({mediumRangeBegin})"] > dataframe["maLong"])
+                        & (dataframe['close'] > dataframe[f'bbUpperBand({bbWindowBegin})'])  # pointed up
                         & (dataframe['rsi'] > 60)
                 )
             ),
@@ -145,11 +154,10 @@ class SimpleHyperopt(IHyperOpt):
 
 
     def populate_sell_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
-
         dataframe.loc[
             (
                 (
-                        dataframe[f"maShort({shortRangeBegin})"] < dataframe['sma_long']
+                        dataframe[f"maShort({shortRangeBegin})"] < dataframe["maLong"]
                 )
             ),
             'sell'] = 1
