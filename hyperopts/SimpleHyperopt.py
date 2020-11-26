@@ -16,12 +16,12 @@ from freqtrade.optimize.hyperopt_interface import IHyperOpt
 import talib.abstract as ta  # noqa
 import freqtrade.vendor.qtpylib.indicators as qtpylib
 
-shortRangeBegin = 5
-shortRangeEnd = 30
-mediumRangeBegin = 35
-mediumRangeEnd = 70
-bbWindowBegin = 15
-bbWindowEnd = 120
+shortRangeBegin = 25
+shortRangeEnd = 150
+mediumRangeBegin = 180
+mediumRangeEnd = 360
+bbWindowBegin = 30
+bbWindowEnd = 180
 
 class SimpleHyperopt(IHyperOpt):
     """
@@ -66,13 +66,13 @@ class SimpleHyperopt(IHyperOpt):
 
     @staticmethod
     def populate_indicators(dataframe: DataFrame, metadata: dict) -> DataFrame:
-        for short in range(shortRangeBegin, shortRangeEnd):
+        for short in range(shortRangeBegin, shortRangeEnd, 5):
             dataframe[f'maShort({short})'] = ta.SMA(dataframe, timeperiod=short)
 
-        for medium in range(mediumRangeBegin, mediumRangeEnd):
+        for medium in range(mediumRangeBegin, mediumRangeEnd, 10):
             dataframe[f'maMedium({medium})'] = ta.SMA(dataframe, timeperiod=medium)
 
-        for window in range(bbWindowBegin, bbWindowEnd, 5):
+        for window in range(bbWindowBegin, bbWindowEnd, 10):
             bollinger = qtpylib.bollinger_bands(dataframe['close'], window=window, stds=2)
             dataframe[f'bbUpperBand({window})'] = bollinger['upper']
 
@@ -88,14 +88,14 @@ class SimpleHyperopt(IHyperOpt):
         Define your Hyperopt space for searching buy strategy parameters.
         """
         buyTriggerList = []
-        for short in range(shortRangeBegin, shortRangeEnd):
-            for medium in range(mediumRangeBegin, mediumRangeEnd):
+        for short in range(shortRangeBegin, shortRangeEnd, 5):
+            for medium in range(mediumRangeBegin, mediumRangeEnd, 10):
                 # The output will be (short, long)
                 buyTriggerList.append(
                     f"{short}.{medium}"
                 )
         bbWindowList = []
-        for bbWindow in range(bbWindowBegin, bbWindowEnd, 5):
+        for bbWindow in range(bbWindowBegin, bbWindowEnd, 10):
             bbWindowList.append(bbWindow)
 
         return [
@@ -110,8 +110,8 @@ class SimpleHyperopt(IHyperOpt):
         Define your Hyperopt space for searching sell strategy parameters.
         """
         buyTriggerList = []
-        for short in range(shortRangeBegin, shortRangeEnd):
-            for medium in range(mediumRangeBegin, mediumRangeEnd):
+        for short in range(shortRangeBegin, shortRangeEnd, 5):
+            for medium in range(mediumRangeBegin, mediumRangeEnd, 10):
                 # The output will be (short, long)
                 buyTriggerList.append(
                     f"{short}.{medium}"
